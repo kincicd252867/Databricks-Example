@@ -1,0 +1,33 @@
+{
+    "num_workers": 2,
+    "cluster_name": "etl-job-cluster",
+    "spark_version": "13.3.x-scala2.12",
+    "spark_conf": {
+        "spark.sql.adaptive.enabled": "true",
+        "spark.sql.adaptive.coalescePartitions.enabled": "true",
+        "spark.databricks.delta.optimizeWrite.enabled": "true",
+        "spark.databricks.delta.autoCompact.enabled": "true"
+    },
+    "node_type_id": "Standard_DS3_v2",
+    "driver_node_type_id": "Standard_DS3_v2",
+    "autoscale": {
+        "min_workers": 2,
+        "max_workers": 8
+    },
+    "autotermination_minutes": 30,
+    "cluster_log_conf": {
+        "dbfs": {
+            "destination": "dbfs:/cluster-logs"
+        }
+    },
+    "custom_tags": {
+        "environment": "production",
+        "project": "silver-etl",
+        "team": "data-engineering"
+    },
+    "spark_env_vars": {
+        "PYSPARK_PYTHON": "/databricks/python3/bin/python"
+    },
+    "enable_elastic_disk": true,
+    "timezone": "Asia/Hong_Kong"
+}
