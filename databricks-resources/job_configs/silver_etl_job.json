@@ -1,0 +1,29 @@
+{
+    "name": "Silver_Sales_ETL_Job",
+    "tags": {
+        "env": "prod",
+        "team": "data-engineering"
+    },
+    "email_notifications": {
+        "on_start": ["riekin2019@gmail.com"],
+        "on_failure": ["riekin2024@gmail.com"]
+    },
+    "timeout_seconds": 7200,
+    "max_retries": 1,
+    "schedule": {
+        "quartz_cron_expression": "0 0 2 * * ?", // Run daily at 2 AM
+        "timezone_id": "Asia/Hong_Kong"
+    },
+    "tasks": [
+        {
+            "task_key": "Run_Silver_ETL",
+            "description": "Runs the Silver ETL notebook",
+            "notebook_task": {
+                "notebook_path": "/Shared/my-project/silver_etl_notebook",
+                "source": "WORKSPACE"
+            },
+            "existing_cluster_id": "${databricks.cluster.prod.job}", // ID injected by pipeline
+            "timeout_seconds": 3600
+        }
+    ]
+}
