@@ -1,0 +1,171 @@
+name: Databricks CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+env:
+  PYTHON_VERSION: '3.10'
+  PROJECT_VERSION: '1.0.0'
+
+jobs:
+  test-and-analyze:
+    name: Test and Analyze
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0  # Needed for SonarQube to get full history
+
+    - name: Set up Python ${{ env.PYTHON_VERSION }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements-dev.txt
+        pip install -e .
+
+    - name: Run unit tests with coverage
+      run: |
+        python -m pytest tests/unit/ -v --cov=src --cov-report=xml:coverage.xml
+
+    - name: SonarQube Scan
+      uses: SonarSource/sonarqube-scan-action@v1
+      env:
+        SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+        SONAR_HOST_URL: ${{ secrets.SONARQUBE_HOST_URL }}
+      with:
+        args: >
+          -Dsonar.projectKey=my-databricks-project
+          -Dsonar.projectName=my-databricks-project
+          -Dsonar.projectVersion=${{ env.PROJECT_VERSION }}
+          -Dsonar.sources=src,notebooks
+          -Dsonar.tests=tests/unit
+          -Dsonar.python.coverage.reportPaths=coverage.xml
+          -Dsonar.exclusions=**/__init__.py,**/test_*.py
+          -Dsonar.test.inclusions=**/test_*.py
+
+    - name: SonarQube Quality Gate check
+      uses: SonarSource/sonarqube-quality-gate-action@v1
+      timeout-minutes: 5
+      env:
+        SONAR_TOKEN: ${{ secrets.SONARQUBE_TOKEN }}
+
+    - name: Upload coverage reports
+      uses: actions/upload-artifact@v4
+      with:
+        name: coverage-report
+        path: coverage.xml
+
+  build-package:
+    name: Build Package
+    runs-on: ubuntu-latest
+    needs: test-and-analyze
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ env.PYTHON_VERSION }}
+
+    - name: Build wheel package
+      run: |
+        pip install setuptools wheel
+        python setup.py bdist_wheel
+
+    - name: Upload wheel package
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-wheel-package
+        path: dist/*.whl
+
+  deploy-to-dev:
+    name: Deploy to Development
+    runs-on: ubuntu-latest
+    needs: [test-and-analyze, build-package]
+    environment: dev
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download wheel package
+      uses: actions/download-artifact@v4
+      with:
+        name: python-wheel-package
+
+    - name: Install Databricks CLI
+      run: pip install databricks-cli
+
+    - name: Deploy to Databricks Dev
+      env:
+        DATABRICKS_HOST: ${{ secrets.DATABRICKS_DEV_HOST }}
+        DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_DEV_TOKEN }}
+      run: |
+        # Upload notebooks
+        databricks workspace import_dir ./notebooks /Shared/my-project --overwrite
+        
+        # Upload wheel library to DBFS
+        databricks fs cp --overwrite *.whl "dbfs:/FileStore/wheels/my_project-${{ env.PROJECT_VERSION }}-py3-none-any.whl"
+        
+        # Create or update job (assuming you have a job config file)
+        if databricks jobs list --output json | grep -q "Silver_Sales_ETL_Job"; then
+          JOB_ID=$(databricks jobs list --output json | jq -r '.jobs[] | select(.settings.name == "Silver_Sales_ETL_Job").job_id')
+          databricks jobs reset --job-id $JOB_ID --json-file databricks-resources/job_configs/silver_etl_job.json
+        else
+          databricks jobs create --json-file databricks-resources/job_configs/silver_etl_job.json
+        fi
+
+    - name: Run integration tests
+      env:
+        DATABRICKS_HOST: ${{ secrets.DATABRICKS_DEV_HOST }}
+        DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_DEV_TOKEN }}
+      run: |
+        python -m pytest tests/integration/ -v --cluster-id ${{ secrets.DATABRICKS_DEV_CLUSTER_ID }}
+
+  deploy-to-prod:
+    name: Deploy to Production
+    runs-on: ubuntu-latest
+    needs: deploy-to-dev
+    environment: prod
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Download wheel package
+      uses: actions/download-artifact@v4
+      with:
+        name: python-wheel-package
+
+    - name: Install Databricks CLI
+      run: pip install databricks-cli
+
+    - name: Deploy to Databricks Prod
+      env:
+        DATABRICKS_HOST: ${{ secrets.DATABRICKS_PROD_HOST }}
+        DATABRICKS_TOKEN: ${{ secrets.DATABRICKS_PROD_TOKEN }}
+      run: |
+        # Upload notebooks
+        databricks workspace import_dir ./notebooks /Shared/my-project --overwrite
+        
+        # Upload wheel library to DBFS
+        databricks fs cp --overwrite *.whl "dbfs:/FileStore/wheels/my_project-${{ env.PROJECT_VERSION }}-py3-none-any.whl"
+        
+        # Create or update job
+        if databricks jobs list --output json | grep -q "Silver_Sales_ETL_Job"; then
+          JOB_ID=$(databricks jobs list --output json | jq -r '.jobs[] | select(.settings.name == "Silver_Sales_ETL_Job").job_id')
+          databricks jobs reset --job-id $JOB_ID --json-file databricks-resources/job_configs/silver_etl_job.json
+        else
+          databricks jobs create --json-file databricks-resources/job_configs/silver_etl_job.json
+        fi
